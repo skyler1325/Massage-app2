@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crawler Robot Live Telemetry</title>
+    <style>
+        body {
+            background-color: #1e1e1e;
+            color: white;
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #controls {
+            width: 100%;
+            max-width: 480px;
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+        }
+        select, button {
+            flex: 1;
+            padding: 12px;
+            background-color: #333;
+            color: #00ffcc;
+            border: 2px solid #555;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        button {
+            background-color: #00ffcc;
+            color: #1e1e1e;
+            border: none;
+        }
+        #hud {
+            width: 100%;
+            max-width: 480px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        canvas {
+            background-color: #111;
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <!-- Target Selection Dropdown Menu -->
+        <select id="targetSelect">
+            <option value="Neck (Home)">Target: Neck (Home)</option>
+            <option value="Left Teres">Target: Left Teres</option>
+            <option value="Left Triceps">Target: Left Triceps</option>
+            <option value="Right Teres">Target: Right Teres</option>
+            <option value="Right Triceps">Target: Right Triceps</option>
+        </select>
+        <button id="startBtn">Start Telemetry</button>
+    </div>
+
+    <div id="hud">
+        <strong>ROBOT TELEMETRY</strong><br>
+        Target: <span id="valTarget" style="color:#00ffcc">Neck (Home)</span><br>
+        X: <span id="valX">0.0</span> mm | Y: <span id="valY">0.0</span> mm<br>
+        Heading: <span id="valAngle">0.0</span>°
+    </div>
+
+    <canvas id="mapCanvas" width="480" height="320"></canvas>
+
+    <script>
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        const targetSelect = document.getElementById('targetSelect');
+
+        // --- ROBOT STATE (in millimeters) ---
+        let robotX = 0.0;
+        let robotY = 0.0;
+        let robotAngle = 0.0; 
+        let activeTargetKey = "Neck (Home)";
+
+        // --- COMPLETE ANATOMICAL WAYPOINTS ---
+        const TARGETS = {
+            "Neck (Home)":   { x: 0,    y: 0,    color: "green" },
+            "Left Teres":    { x: -120, y: -180, color: "red" },
+            "Left Triceps":  { x: -180, y: -280, color: "orange" },
+            "Right Teres":   { x: 120,  y: -180, color: "red" },
+            "Right Triceps": { x: 180,  y: -280, color: "orange" }
+        };
+
+        function toCanvasCoords(mmX, mmY) {
+            return {
+                x: 240 + (mmX * 0.5),
+                y: 160 + (mmY * 0.5) 
+            };
+        }
+
+        function drawMap() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Draw All Target Muscle Nodes
+            for (const [name, target] of Object.entries(TARGETS)) {
+                let pos = toCanvasCoords(target.x, target.y);
+                
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+                ctx.fillStyle = target.color;
+                ctx.fill();
+
+                // Highlight currently selected target with an outer ring
+                if (name === activeTargetKey) {
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
+                    ctx.strokeStyle = "#00ffcc";
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+                ctx.fillStyle = "white";
+                ctx.font = "bold 10px Arial";
+                ctx.fillText(" " + name, pos.x + 10, pos.y + 4);
+            }
+
+            // 2. Draw Moving Robot
+            let robotPos = toCanvasCoords(robotX, robotY);
+            ctx.save();
+            ctx.translate(robotPos.x, robotPos.y);
+            ctx.rotate((robotAngle * Math.PI) / 180); 
+
+            ctx.beginPath();
+            ctx.moveTo(0, -12);  
+            ctx.lineTo(-8, 8);   
+            ctx.lineTo(8, 8);    
+            ctx.closePath();
+            ctx.fillStyle = "#00ffcc";
+            ctx.fill();
+            ctx.restore();
+
+            // 3. Update Status Panel
+            document.getElementById('valTarget').innerText = activeTargetKey;
+            document.getElementById('valX').innerText = robotX.toFixed(1);
+            document.getElementById('valY').innerText = robotY.toFixed(1);
+            document.getElementById('valAngle').innerText = robotAngle.toFixed(1);
+        }
+
+        // --- DROP-DOWN EVENT LISTENER ---
+        targetSelect.addEventListener('change', (e) => {
+            activeTargetKey = e.target.value;
+            drawMap();
+        });
+
+        // --- HARDWARE INTERFACE START ---
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permissionState = await DeviceOrientationEvent.requestPermission();
+                    if (permissionState === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation);
+                    }
+                } catch (error) {
+                    alert("Gyro sensor blocked: " + error);
+                }
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+            }
+            
+            startTrackingSimulation();
+            document.getElementById('startBtn').style.display = 'none';
+        });
+
+        function handleOrientation(event) {
+            if (event.alpha !== null) {
+                // If phone gyro is active, it overrides simulation angles
+                robotAngle = event.alpha; 
+            }
+        }
+
+        // --- DYNAMIC PATH NAVIGATION SIMULATION ---
+        function startTrackingSimulation() {
+            setInterval(() => {
+                let target = TARGETS[activeTargetKey];
+                let dx = target.x - robotX;
+                let dy = target.y - robotY;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist > 3) {
+                    // Calculate vector heading to change angles fluidly
+                    robotAngle = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+                    
+                    // Step toward the active target point
+                    robotX += (dx / dist) * 2;
+                    robotY += (dy / dist) * 2;
+                }
+                drawMap();
+            }, 50); 
+        }
+
+        drawMap();
+    </script>
+</body>
+</html>
