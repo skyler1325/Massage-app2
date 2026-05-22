@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crawler Robot Desktop Pointer-Lock Telemetry</title>
+    <title>Crawler Robot Calibrated Telemetry</title>
     <style>
         * {
             box-sizing: border-box;
@@ -17,7 +17,7 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            overflow: hidden; /* Prevents background page scrolling while playing */
+            overflow: hidden; 
         }
         #controls {
             width: 100%;
@@ -63,7 +63,7 @@
             border: 2px solid #333;
             border-radius: 8px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.6);
-            cursor: crosshair; /* Changes your mouse to a targeting crosshair when hovering */
+            cursor: crosshair;
         }
         #lockMessage {
             margin-top: 10px;
@@ -96,18 +96,17 @@
     </div>
 
     <div id="hud">
-        <strong>DESKTOP POINTER LOCK TELEMETRY</strong> [<span id="lockStatus" class="status-unlocked">CURSOR UNLOCKED</span>]<br>
+        <strong>CALIBRATED COMPASS GRID TELEMETRY</strong> [<span id="lockStatus" class="status-unlocked">CURSOR UNLOCKED</span>]<br>
         Target: <span id="valTarget" style="color:#00ffcc">Neck (Home)</span><br>
         X: <span id="valX">0.0</span> mm | Y: <span id="valY">0.0</span> mm<br>
-        Heading: <span id="valAngle">0.0</span>°
+        Relative Heading: <span id="valAngle">0.0</span>°
     </div>
 
-    <!-- Telemetry Map Grid Viewport -->
     <canvas id="mapCanvas" width="640" height="400"></canvas>
     
     <div id="lockMessage">
-        Click directly on the **Black Canvas Box** to lock your mouse like <em>Shell Shockers</em>.<br>
-        Press the <strong>ESC (Escape)</strong> key on your keyboard to free your cursor instantly.
+        Position the phone on your starting point, face straight forward, and click the box.<br>
+        Press your phone's <strong>Back Button</strong> (or ESC on a PC) to release the cursor.
     </div>
 
     <script>
@@ -116,16 +115,17 @@
         const targetSelect = document.getElementById('targetSelect');
         const lockStatusDisplay = document.getElementById('lockStatus');
 
-        // --- ROBOT STATE (Driven by raw mouse events) ---
+        // --- ROBOT STATE (Driven by true sensors) ---
         let robotX = 0.0;
         let robotY = 0.0;
         let robotAngle = 0.0; 
         let activeTargetKey = "Neck (Home)";
 
-        // --- POINTER MOUSE SENSITIVITY CALIBRATION ---
-        // Alter this value to match your hand scaling preference.
-        // Higher values = requires more physical mouse dragging distance to move 1mm.
-        const MOUSE_COUNTS_PER_MM = 36.0; 
+        // --- THE INITIAL COMPASS ANCHOR OFFSET ---
+        let startAngleOffset = null; 
+
+        // --- ADJUSTED CALIBRATION SCALING ---
+        const MOUSE_COUNTS_PER_MM = 0.036; 
 
         const TARGETS = {
             "Neck (Home)":   { x: 0,    y: 0,    color: "green" },
@@ -135,7 +135,6 @@
             "Right Triceps": { x: 180,  y: -280, color: "orange" }
         };
 
-        // Center point mapping context layout
         function toCanvasCoords(mmX, mmY) {
             return {
                 x: (canvas.width / 2) + (mmX * 0.5),
@@ -146,7 +145,7 @@
         function drawMap() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Draw clean background alignment grid crosshairs
+            // Draw local coordinate baseline reference lines
             ctx.strokeStyle = "#222222";
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -154,7 +153,7 @@
             ctx.moveTo(0, canvas.height / 2); ctx.lineTo(canvas.width, canvas.height / 2);
             ctx.stroke();
 
-            // 1. Draw Target Nodes
+            // 1. Draw Landmarks
             for (const [name, target] of Object.entries(TARGETS)) {
                 let pos = toCanvasCoords(target.x, target.y);
                 ctx.beginPath();
@@ -175,7 +174,7 @@
                 ctx.fillText(" " + name, pos.x + 10, pos.y + 4);
             }
 
-            // 2. Draw Vector Robot Arrow
+            // 2. Draw Moving Indicator
             let robotPos = toCanvasCoords(robotX, robotY);
             ctx.save();
             ctx.translate(robotPos.x, robotPos.y);
@@ -190,7 +189,7 @@
             ctx.fill();
             ctx.restore();
 
-            // 3. Render Output Metrics panel
+            // 3. Render Metric Data
             document.getElementById('valTarget').innerText = activeTargetKey;
             document.getElementById('valX').innerText = robotX.toFixed(1);
             document.getElementById('valY').innerText = robotY.toFixed(1);
@@ -202,58 +201,75 @@
             drawMap();
         });
 
-        // --- SHELL SHOCKERS CURSOR ENGINE ---
-        // Clicking directly onto the tracking graphic canvas triggers pointer capture
-        canvas.addEventListener('click', () => {
+        // --- POINTER CAPTURE & AUTOCALIBRATION SEQUENCE ---
+        canvas.addEventListener('click', async () => {
+            startAngleOffset = null;
+
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permissionState = await DeviceOrientationEvent.requestPermission();
+                    if (permissionState === 'granted') {
+                        window.addEventListener('deviceorientation', handleCompassInput);
+                    }
+                } catch (e) { console.error("Compass access blocked: " + e); }
+            } else {
+                window.addEventListener('deviceorientation', handleCompassInput);
+            }
+
             canvas.requestPointerLock = canvas.requestPointerLock || canvas.mozRequestPointerLock;
             canvas.requestPointerLock();
         });
 
-        // Track pointer lock state changes to toggle listeners and CSS styles
         document.addEventListener('pointerlockchange', lockChangeAlert, false);
-        document.addEventListener('mozpointerlockchange', lockChangeAlert, false);
 
         function lockChangeAlert() {
-            if (document.pointerLockElement === canvas || document.mozPointerLockElement === canvas) {
-                // System cursor successfully trapped
+            if (document.pointerLockElement === canvas) {
                 lockStatusDisplay.innerText = "CURSOR LOCKED (ACTIVE)";
                 lockStatusDisplay.className = "status-locked";
-                
-                // Engage the real-world input stream loop
                 document.addEventListener("mousemove", updatePosition, false);
             } else {
-                // System cursor freed via ESC key
                 lockStatusDisplay.innerText = "CURSOR UNLOCKED (PAUSED)";
                 lockStatusDisplay.className = "status-unlocked";
-                
                 document.removeEventListener("mousemove", updatePosition, false);
+                startAngleOffset = null; 
             }
         }
 
-        // --- UNBOUNDED TRUE HARDWARE DATA PROCESSING ---
-        function updatePosition(event) {
-            // Read un-bounded data streams straight from the hardware mouse layer
-            let movementX = event.movementX || event.mozMovementX || 0;
-            let movementY = event.movementY || event.mozMovementY || 0;
+        // --- REAL HARDWARE COMPASS CORRECTION ENGINE ---
+        function handleCompassInput(event) {
+            let rawHeading = event.webkitCompassHeading || (360 - event.alpha);
+            
+            if (rawHeading !== undefined && rawHeading !== null) {
+                if (startAngleOffset === null) {
+                    startAngleOffset = rawHeading;
+                }
 
-            // Simple dead-reckoning engine mapping variables directly
-            let deltaX = movementX / MOUSE_COUNTS_PER_MM;
-            let deltaY = movementY / MOUSE_COUNTS_PER_MM;
+                let relativeHeading = rawHeading - startAngleOffset;
+                robotAngle = (relativeHeading + 360) % 360;
+                drawMap();
+            }
+        }
+
+        // --- UNBOUNDED SPATIAL TRANSLATION MATRIX ---
+        function updatePosition(event) {
+            let movementX = event.movementX || 0;
+            let movementY = event.movementY || 0;
+
+            let rawMmX = movementX / MOUSE_COUNTS_PER_MM;
+            let rawMmY = movementY / MOUSE_COUNTS_PER_MM;
+
+            let rad = (robotAngle * Math.PI) / 180;
+
+            let deltaX = rawMmX * Math.cos(rad) - rawMmY * Math.sin(rad);
+            let deltaY = rawMmX * Math.sin(rad) + rawMmY * Math.cos(rad);
 
             robotX += deltaX;
             robotY += deltaY;
 
-            // Automatically spin the orientation arrow toward the current dragging direction vector
-            if (movementX !== 0 || movementY !== 0) {
-                robotAngle = Math.atan2(movementX, -movementY) * (180 / Math.PI);
-            }
-
             drawMap();
         }
 
-        // Render initial view layout frame
         drawMap();
     </script>
 </body>
 </html>
-
