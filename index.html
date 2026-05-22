@@ -124,8 +124,10 @@
         // --- THE INITIAL COMPASS ANCHOR OFFSET ---
         let startAngleOffset = null; 
 
-        // --- ADJUSTED CALIBRATION SCALING ---
-        const MOUSE_COUNTS_PER_MM = 0.036; 
+        // --- UPDATED CALIBRATION SCALING ---
+        // Raised this from 0.036 to 16.0 to cut down sensitivity massively!
+        // If it is still too sensitive, change 16.0 to a higher number like 32.0.
+        const MOUSE_COUNTS_PER_MM = 16.0; 
 
         const TARGETS = {
             "Neck (Home)":   { x: 0,    y: 0,    color: "green" },
@@ -273,3 +275,4 @@
     </script>
 </body>
 </html>
+
