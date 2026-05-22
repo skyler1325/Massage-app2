@@ -56,7 +56,6 @@
 <body>
 
     <div id="controls">
-        <!-- Target Selection Dropdown Menu -->
         <select id="targetSelect">
             <option value="Neck (Home)">Target: Neck (Home)</option>
             <option value="Left Teres">Target: Left Teres</option>
@@ -86,6 +85,7 @@
         let robotY = 0.0;
         let robotAngle = 0.0; 
         let activeTargetKey = "Neck (Home)";
+        let trackingInterval = null; 
 
         // --- COMPLETE ANATOMICAL WAYPOINTS ---
         const TARGETS = {
@@ -106,7 +106,7 @@
         function drawMap() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 1. Draw All Target Muscle Nodes
+            // 1. Draw Target Muscle Nodes
             for (const [name, target] of Object.entries(TARGETS)) {
                 let pos = toCanvasCoords(target.x, target.y);
                 
@@ -115,7 +115,6 @@
                 ctx.fillStyle = target.color;
                 ctx.fill();
 
-                // Highlight currently selected target with an outer ring
                 if (name === activeTargetKey) {
                     ctx.beginPath();
                     ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
@@ -129,7 +128,7 @@
                 ctx.fillText(" " + name, pos.x + 10, pos.y + 4);
             }
 
-            // 2. Draw Moving Robot
+            // 2. Draw Moving Robot (Arrow orientation)
             let robotPos = toCanvasCoords(robotX, robotY);
             ctx.save();
             ctx.translate(robotPos.x, robotPos.y);
@@ -144,20 +143,20 @@
             ctx.fill();
             ctx.restore();
 
-            // 3. Update Status Panel
+            // 3. Update Text Metrics
             document.getElementById('valTarget').innerText = activeTargetKey;
             document.getElementById('valX').innerText = robotX.toFixed(1);
             document.getElementById('valY').innerText = robotY.toFixed(1);
             document.getElementById('valAngle').innerText = robotAngle.toFixed(1);
         }
 
-        // --- DROP-DOWN EVENT LISTENER ---
+        // --- DROP-DOWN SELECTION UPDATER ---
         targetSelect.addEventListener('change', (e) => {
             activeTargetKey = e.target.value;
             drawMap();
         });
 
-        // --- HARDWARE INTERFACE START ---
+        // --- HARDWARE TELEMETRY INTERFACE ---
         document.getElementById('startBtn').addEventListener('click', async () => {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
@@ -166,41 +165,41 @@
                         window.addEventListener('deviceorientation', handleOrientation);
                     }
                 } catch (error) {
-                    alert("Gyro sensor blocked: " + error);
+                    console.log("Gyro sensor access skipped or blocked: " + error);
                 }
             } else {
                 window.addEventListener('deviceorientation', handleOrientation);
             }
             
+            if (trackingInterval) clearInterval(trackingInterval);
             startTrackingSimulation();
+            
             document.getElementById('startBtn').style.display = 'none';
         });
 
         function handleOrientation(event) {
-            if (event.alpha !== null) {
-                // If phone gyro is active, it overrides simulation angles
-                robotAngle = event.alpha; 
-            }
+            // Un-comment the line below if you want the arrow to spin physically with your phone gyro rotation
+            // if (event.alpha !== null) { robotAngle = event.alpha; }
         }
 
-        // --- DYNAMIC PATH NAVIGATION SIMULATION ---
+        // --- PATH CALCULATION LOOP ---
         function startTrackingSimulation() {
-            setInterval(() => {
+            trackingInterval = setInterval(() => {
                 let target = TARGETS[activeTargetKey];
                 let dx = target.x - robotX;
                 let dy = target.y - robotY;
                 let dist = Math.sqrt(dx*dx + dy*dy);
 
-                if (dist > 3) {
-                    // Calculate vector heading to change angles fluidly
-                    robotAngle = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
-                    
-                    // Step toward the active target point
-                    robotX += (dx / dist) * 2;
-                    robotY += (dy / dist) * 2;
+                if (dist > 2) {
+                    robotX += (dx / dist) * 3; 
+                    robotY += (dy / dist) * 3; 
+                    robotAngle = Math.atan2(dx, -dy) * (180 / Math.PI);
+                } else {
+                    robotX = target.x;
+                    robotY = target.y;
                 }
                 drawMap();
-            }, 50); 
+            }, 40); 
         }
 
         drawMap();
