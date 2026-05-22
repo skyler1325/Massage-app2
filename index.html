@@ -67,7 +67,7 @@
             <option value="Right Teres">Target: Right Teres</option>
             <option value="Right Triceps">Target: Right Triceps</option>
         </select>
-        <button id="startBtn">Activate Camera & Sensors</button>
+        <button id="startBtn">Activate Camera & Flash</button>
     </div>
 
     <div id="hud">
@@ -101,9 +101,9 @@
         // Optical flow processing frames
         let prevFrameData = null;
 
-        // --- DYNAMIC CALIBRATION SCALING ---
-        // Lowered from 1.8 to 0.018 to increase input sensitivity by 100x!
-        const PIXELS_PER_MM = 0.018; 
+        // --- ADJUSTED CALIBRATION SCALING ---
+        // Keeps the tracking cut exactly in half based on your last adjustment
+        const PIXELS_PER_MM = 0.036; 
 
         const TARGETS = {
             "Neck (Home)":   { x: 0,    y: 0,    color: "green" },
@@ -191,6 +191,26 @@
                 });
                 video.srcObject = stream;
                 document.getElementById('startBtn').style.display = 'none';
+
+                // --- FLASHLIGHT / TORCH ACTIVATION CODE ---
+                // Wait for the video track to initialize, then check for torch support and turn it on
+                setTimeout(async () => {
+                    const track = stream.getVideoTracks()[0];
+                    const capabilities = track.getCapabilities();
+                    
+                    if (capabilities.torch) {
+                        try {
+                            await track.applyConstraints({
+                                advanced: [{ torch: true }]
+                            });
+                        } catch (torchErr) {
+                            console.log("Hardware torch failed to lock: " + torchErr);
+                        }
+                    } else {
+                        console.log("Torch capability not supported on this specific browser interface.");
+                    }
+                }, 500);
+
                 requestAnimationFrame(processCameraFrame);
             } catch (err) {
                 alert("Camera Error: " + err);
@@ -257,172 +277,4 @@
     </script>
 </body>
 </html>
-        // --- CALIBRATION FACTOR ---
-        // How many camera pixels equal 1 millimeter of actual movement.
-        // Adjust this number based on how high the camera sits above your back!
-        const PIXELS_PER_MM = 1.8; 
 
-        const TARGETS = {
-            "Neck (Home)":   { x: 0,    y: 0,    color: "green" },
-            "Left Teres":    { x: -120, y: -180, color: "red" },
-            "Left Triceps":  { x: -180, y: -280, color: "orange" },
-            "Right Teres":   { x: 120,  y: -180, color: "red" },
-            "Right Triceps": { x: 180,  y: -280, color: "orange" }
-        };
-
-        function toCanvasCoords(mmX, mmY) {
-            return {
-                x: 240 + (mmX * 0.5),
-                y: 160 + (mmY * 0.5) 
-            };
-        }
-
-        function drawMap() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // 1. Draw Target Landmarks
-            for (const [name, target] of Object.entries(TARGETS)) {
-                let pos = toCanvasCoords(target.x, target.y);
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
-                ctx.fillStyle = target.color;
-                ctx.fill();
-
-                if (name === activeTargetKey) {
-                    ctx.beginPath();
-                    ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
-                    ctx.strokeStyle = "#00ffcc";
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-
-                ctx.fillStyle = "white";
-                ctx.font = "bold 10px Arial";
-                ctx.fillText(" " + name, pos.x + 10, pos.y + 4);
-            }
-
-            // 2. Draw Active Position Indicator
-            let robotPos = toCanvasCoords(robotX, robotY);
-            ctx.save();
-            ctx.translate(robotPos.x, robotPos.y);
-            ctx.rotate((robotAngle * Math.PI) / 180); 
-
-            ctx.beginPath();
-            ctx.moveTo(0, -12);  
-            ctx.lineTo(-8, 8);   
-            ctx.lineTo(8, 8);    
-            ctx.closePath();
-            ctx.fillStyle = "#00ffcc";
-            ctx.fill();
-            ctx.restore();
-
-            // 3. Render Metric Data
-            document.getElementById('valTarget').innerText = activeTargetKey;
-            document.getElementById('valX').innerText = robotX.toFixed(1);
-            document.getElementById('valY').innerText = robotY.toFixed(1);
-            document.getElementById('valAngle').innerText = robotAngle.toFixed(1);
-        }
-
-        targetSelect.addEventListener('change', (e) => {
-            activeTargetKey = e.target.value;
-            drawMap();
-        });
-
-        // --- ACTIVATING GENUINE SMARTPHONE SENSORS ---
-        document.getElementById('startBtn').addEventListener('click', async () => {
-            // 1. Hook up the Phone's Gyroscope/Compass for True Rotation Tracking
-            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                try {
-                    const permissionState = await DeviceOrientationEvent.requestPermission();
-                    if (permissionState === 'granted') {
-                        window.addEventListener('deviceorientation', handleOrientation);
-                    }
-                } catch (e) { alert("Motion sensors blocked: " + e); }
-            } else {
-                window.addEventListener('deviceorientation', handleOrientation);
-            }
-
-            // 2. Initialize Rear Facing Video Stream for True Physical Positioning
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: { exact: "environment" } }, // Forces back camera
-                    audio: false
-                });
-                video.srcObject = stream;
-                document.getElementById('startBtn').style.display = 'none';
-                
-                // Start real-time image processing loop
-                requestAnimationFrame(processCameraFrame);
-            } catch (err) {
-                alert("Camera Initialization Error! Make sure to allow camera permissions: " + err);
-            }
-        });
-
-        function handleOrientation(event) {
-            // Absolute magnetic alpha/compass orientation
-            if (event.alpha !== null) {
-                robotAngle = (360 - event.alpha) % 360; 
-                drawMap();
-            }
-        }
-
-        // --- OPTICAL FLOW TRACKING MATHEMATICS (TRUE INPUT DATA) ---
-        function processCameraFrame() {
-            if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                // Down-sample the frame to 160x120 to keep mobile execution lighting fast
-                hiddenCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-                const currentFrame = hiddenCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
-
-                if (prevFrameData) {
-                    let flowX = 0;
-                    let flowY = 0;
-                    let sampleCount = 0;
-
-                    const curr = currentFrame.data;
-                    const prev = prevFrameData.data;
-                    const w = hiddenCanvas.width;
-                    const h = hiddenCanvas.height;
-
-                    // Block matching step calculation (Simplified Optical Tracker)
-                    // Compares brightness adjustments across a 2D sample grid
-                    for (let y = 20; y < h - 20; y += 15) {
-                        for (let x = 20; x < w - 20; x += 15) {
-                            let idx = (y * w + x) * 4;
-                            let brightnessDiff = curr[idx] - prev[idx]; // Compare Grayscale variance
-
-                            if (Math.abs(brightnessDiff) > 12) {
-                                // Accumulate coordinate shift vectors
-                                flowX += (curr[idx] - curr[idx + 4]); 
-                                flowY += (curr[idx] - curr[idx + (w * 4)]);
-                                sampleCount++;
-                            }
-                        }
-                    }
-
-                    if (sampleCount > 5) {
-                        // Average pixel drift calculation
-                        let pixelMoveX = (flowX / sampleCount) * 0.1;
-                        let pixelMoveY = (flowY / sampleCount) * 0.1;
-
-                        // Dead-reckoning: Rotate the movement matrix to match phone heading
-                        let rad = (robotAngle * Math.PI) / 180;
-                        let deltaX = (pixelMoveX * Math.cos(rad) - pixelMoveY * Math.sin(rad)) / PIXELS_PER_MM;
-                        let deltaY = (pixelMoveX * Math.sin(rad) + pixelMoveY * Math.cos(rad)) / PIXELS_PER_MM;
-
-                        // Inject real physics values into live map telemetry
-                        robotX += deltaX;
-                        robotY += deltaY;
-                    }
-                }
-
-                prevFrameData = currentFrame;
-                drawMap();
-            }
-            // Keep frame updates rolling infinitely
-            requestAnimationFrame(processCameraFrame);
-        }
-
-        drawMap();
-    </script>
-</body>
-</html>
