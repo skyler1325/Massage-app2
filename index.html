@@ -101,6 +101,162 @@
         // Optical flow processing frames
         let prevFrameData = null;
 
+        // --- DYNAMIC CALIBRATION SCALING ---
+        // Lowered from 1.8 to 0.018 to increase input sensitivity by 100x!
+        const PIXELS_PER_MM = 0.018; 
+
+        const TARGETS = {
+            "Neck (Home)":   { x: 0,    y: 0,    color: "green" },
+            "Left Teres":    { x: -120, y: -180, color: "red" },
+            "Left Triceps":  { x: -180, y: -280, color: "orange" },
+            "Right Teres":   { x: 120,  y: -180, color: "red" },
+            "Right Triceps": { x: 180,  y: -280, color: "orange" }
+        };
+
+        function toCanvasCoords(mmX, mmY) {
+            return {
+                x: 240 + (mmX * 0.5),
+                y: 160 + (mmY * 0.5) 
+            };
+        }
+
+        function drawMap() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Draw Target Landmarks
+            for (const [name, target] of Object.entries(TARGETS)) {
+                let pos = toCanvasCoords(target.x, target.y);
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+                ctx.fillStyle = target.color;
+                ctx.fill();
+
+                if (name === activeTargetKey) {
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
+                    ctx.strokeStyle = "#00ffcc";
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+                ctx.fillStyle = "white";
+                ctx.font = "bold 10px Arial";
+                ctx.fillText(" " + name, pos.x + 10, pos.y + 4);
+            }
+
+            // 2. Draw Active Position Indicator
+            let robotPos = toCanvasCoords(robotX, robotY);
+            ctx.save();
+            ctx.translate(robotPos.x, robotPos.y);
+            ctx.rotate((robotAngle * Math.PI) / 180); 
+
+            ctx.beginPath();
+            ctx.moveTo(0, -12);  
+            ctx.lineTo(-8, 8);   
+            ctx.lineTo(8, 8);    
+            ctx.closePath();
+            ctx.fillStyle = "#00ffcc";
+            ctx.fill();
+            ctx.restore();
+
+            // 3. Render Metric Data
+            document.getElementById('valTarget').innerText = activeTargetKey;
+            document.getElementById('valX').innerText = robotX.toFixed(1);
+            document.getElementById('valY').innerText = robotY.toFixed(1);
+            document.getElementById('valAngle').innerText = robotAngle.toFixed(1);
+        }
+
+        targetSelect.addEventListener('change', (e) => {
+            activeTargetKey = e.target.value;
+            drawMap();
+        });
+
+        // --- ACTIVATING GENUINE SMARTPHONE SENSORS ---
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permissionState = await DeviceOrientationEvent.requestPermission();
+                    if (permissionState === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation);
+                    }
+                } catch (e) { alert("Motion sensors blocked: " + e); }
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { exact: "environment" } }, 
+                    audio: false
+                });
+                video.srcObject = stream;
+                document.getElementById('startBtn').style.display = 'none';
+                requestAnimationFrame(processCameraFrame);
+            } catch (err) {
+                alert("Camera Error: " + err);
+            }
+        });
+
+        function handleOrientation(event) {
+            if (event.alpha !== null) {
+                robotAngle = (360 - event.alpha) % 360; 
+                drawMap();
+            }
+        }
+
+        // --- OPTICAL FLOW TRACKING MATHEMATICS ---
+        function processCameraFrame() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                hiddenCtx.drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+                const currentFrame = hiddenCtx.getImageData(0, 0, hiddenCanvas.width, hiddenCanvas.height);
+
+                if (prevFrameData) {
+                    let flowX = 0;
+                    let flowY = 0;
+                    let sampleCount = 0;
+
+                    const curr = currentFrame.data;
+                    const prev = prevFrameData.data;
+                    const w = hiddenCanvas.width;
+                    const h = hiddenCanvas.height;
+
+                    for (let y = 20; y < h - 20; y += 15) {
+                        for (let x = 20; x < w - 20; x += 15) {
+                            let idx = (y * w + x) * 4;
+                            let brightnessDiff = curr[idx] - prev[idx]; 
+
+                            if (Math.abs(brightnessDiff) > 12) {
+                                flowX += (curr[idx] - curr[idx + 4]); 
+                                flowY += (curr[idx] - curr[idx + (w * 4)]);
+                                sampleCount++;
+                            }
+                        }
+                    }
+
+                    if (sampleCount > 5) {
+                        let pixelMoveX = (flowX / sampleCount) * 0.1;
+                        let pixelMoveY = (flowY / sampleCount) * 0.1;
+
+                        let rad = (robotAngle * Math.PI) / 180;
+                        
+                        let deltaX = (pixelMoveX * Math.cos(rad) - pixelMoveY * Math.sin(rad)) / PIXELS_PER_MM;
+                        let deltaY = (pixelMoveX * Math.sin(rad) + pixelMoveY * Math.cos(rad)) / PIXELS_PER_MM;
+
+                        robotX += deltaX;
+                        robotY += deltaY;
+                    }
+                }
+
+                prevFrameData = currentFrame;
+                drawMap();
+            }
+            requestAnimationFrame(processCameraFrame);
+        }
+
+        drawMap();
+    </script>
+</body>
+</html>
         // --- CALIBRATION FACTOR ---
         // How many camera pixels equal 1 millimeter of actual movement.
         // Adjust this number based on how high the camera sits above your back!
